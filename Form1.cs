@@ -47,14 +47,153 @@ namespace FileCompare
             panel10.Controls.Add(rightHeaderPanel);
             panel10.Controls.SetChildIndex(rightHeaderPanel, 0);
 
-            // If initial paths are present, populate
-            if (!string.IsNullOrWhiteSpace(txtLeftDir.Text) && Directory.Exists(txtLeftDir.Text))
-                PopulateListView(lvwLeftDir, txtLeftDir.Text);
-            if (!string.IsNullOrWhiteSpace(txtRightDir.Text) && Directory.Exists(txtRightDir.Text))
-                PopulateListView(lvwRightDir, txtRightDir.Text);
+            // If initial paths are present, populate (compare if both set)
+            var leftExists = !string.IsNullOrWhiteSpace(txtLeftDir.Text) && Directory.Exists(txtLeftDir.Text);
+            var rightExists = !string.IsNullOrWhiteSpace(txtRightDir.Text) && Directory.Exists(txtRightDir.Text);
+            if (leftExists && rightExists)
+                PopulateBothWithComparison(txtLeftDir.Text, txtRightDir.Text);
+            else
+            {
+                if (leftExists) PopulateListView(lvwLeftDir, txtLeftDir.Text);
+                if (rightExists) PopulateListView(lvwRightDir, txtRightDir.Text);
+            }
 
             // Add context menus for copying selected items to the opposite folder
             CreateContextMenus();
+        }
+
+        // Populate both listviews and indicate differences for items including subfolders
+        private void PopulateBothWithComparison(string leftPath, string rightPath)
+        {
+            // Build item maps: name -> (isDir, size, lastWrite)
+            var leftItems = Directory.Exists(leftPath) ?
+                Directory.EnumerateFileSystemEntries(leftPath).Select(p => new FileSystemInfoWrapper(p)).ToDictionary(w => w.Name, StringComparer.OrdinalIgnoreCase)
+                : new System.Collections.Generic.Dictionary<string, FileSystemInfoWrapper>(StringComparer.OrdinalIgnoreCase);
+            var rightItems = Directory.Exists(rightPath) ?
+                Directory.EnumerateFileSystemEntries(rightPath).Select(p => new FileSystemInfoWrapper(p)).ToDictionary(w => w.Name, StringComparer.OrdinalIgnoreCase)
+                : new System.Collections.Generic.Dictionary<string, FileSystemInfoWrapper>(StringComparer.OrdinalIgnoreCase);
+
+            // prepare lists
+            lvwLeftDir.BeginUpdate(); lvwLeftDir.Items.Clear();
+            lvwRightDir.BeginUpdate(); lvwRightDir.Items.Clear();
+
+            // union of names
+            var allNames = leftItems.Keys.Union(rightItems.Keys, StringComparer.OrdinalIgnoreCase).OrderBy(n => n, StringComparer.OrdinalIgnoreCase);
+            foreach (var name in allNames)
+            {
+                leftItems.TryGetValue(name, out var l);
+                rightItems.TryGetValue(name, out var r);
+
+                // determine state: only left, only right, both same, both different
+                bool onlyLeft = r == null && l != null;
+                bool onlyRight = l == null && r != null;
+                bool both = l != null && r != null;
+
+                // choose colors
+                Color leftBg = Color.White, rightBg = Color.White;
+                if (onlyLeft)
+                {
+                    leftBg = ColorFromName(name);
+                    rightBg = Color.White;
+                }
+                else if (onlyRight)
+                {
+                    leftBg = Color.White;
+                    rightBg = ColorFromName(name);
+                }
+                else if (both)
+                {
+                    // if both are directories, show same color; if files, compare size or timestamp
+                    if (l.IsDirectory && r.IsDirectory)
+                    {
+                        leftBg = rightBg = ColorFromName(name);
+                    }
+                    else if (!l.IsDirectory && !r.IsDirectory)
+                    {
+                        if (l.Length == r.Length && l.LastWriteTime == r.LastWriteTime)
+                        {
+                            leftBg = rightBg = ColorFromName(name);
+                        }
+                        else
+                        {
+                            leftBg = Color.Yellow;
+                            rightBg = Color.Yellow;
+                        }
+                    }
+                    else
+                    {
+                        // one is file, one is dir -> mark difference
+                        leftBg = Color.Orange;
+                        rightBg = Color.Orange;
+                    }
+                }
+
+                // Left item
+                if (l != null)
+                {
+                    var li = new ListViewItem(l.Name);
+                    li.SubItems.Add(l.IsDirectory ? "<DIR>" : FormatSize(l.Length));
+                    li.SubItems.Add(l.LastWriteTime.ToString("g"));
+                    var fg = ForegroundForBackground(leftBg);
+                    li.BackColor = leftBg; li.ForeColor = fg;
+                    foreach (ListViewItem.ListViewSubItem si in li.SubItems) { si.BackColor = leftBg; si.ForeColor = fg; }
+                    lvwLeftDir.Items.Add(li);
+                }
+                else
+                {
+                    var li = new ListViewItem(name);
+                    li.SubItems.Add(""); li.SubItems.Add("");
+                    lvwLeftDir.Items.Add(li);
+                }
+
+                // Right item
+                if (r != null)
+                {
+                    var ri = new ListViewItem(r.Name);
+                    ri.SubItems.Add(r.IsDirectory ? "<DIR>" : FormatSize(r.Length));
+                    ri.SubItems.Add(r.LastWriteTime.ToString("g"));
+                    var fg = ForegroundForBackground(rightBg);
+                    ri.BackColor = rightBg; ri.ForeColor = fg;
+                    foreach (ListViewItem.ListViewSubItem si in ri.SubItems) { si.BackColor = rightBg; si.ForeColor = fg; }
+                    lvwRightDir.Items.Add(ri);
+                }
+                else
+                {
+                    var ri = new ListViewItem(name);
+                    ri.SubItems.Add(""); ri.SubItems.Add("");
+                    lvwRightDir.Items.Add(ri);
+                }
+            }
+
+            lvwLeftDir.EndUpdate(); lvwRightDir.EndUpdate();
+        }
+
+        private class FileSystemInfoWrapper
+        {
+            public string Name { get; }
+            public bool IsDirectory { get; }
+            public long Length { get; }
+            public DateTime LastWriteTime { get; }
+
+            public FileSystemInfoWrapper(string path)
+            {
+                if (Directory.Exists(path))
+                {
+                    var di = new DirectoryInfo(path);
+                    Name = di.Name;
+                    IsDirectory = true;
+                    Length = 0;
+                    LastWriteTime = di.LastWriteTime;
+                }
+                else
+                {
+                    var fi = new FileInfo(path);
+                    Name = fi.Name;
+                    IsDirectory = false;
+                    Length = fi.Exists ? fi.Length : 0;
+                    LastWriteTime = fi.Exists ? fi.LastWriteTime : DateTime.MinValue;
+                }
+            }
         }
 
         private void CreateContextMenus()
@@ -92,29 +231,44 @@ namespace FileCompare
                 return;
             }
 
-            // collect files to copy (ignore folders)
-            var files = selected.Where(it => it.SubItems.Count > 1 && it.SubItems[1].Text != "<DIR>")
-                                .Select(it => it.Text)
-                                .ToList();
-
-            if (!files.Any())
-            {
-                MessageBox.Show("선택한 항목 중 복사 가능한 파일이 없습니다.", "정보", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
+            // selected list contains files and/or directories (relative or immediate names)
 
             int success = 0, failed = 0, skipped = 0;
             bool cancelled = false;
-            foreach (var file in files)
+
+            // Process files and directories; treat directories as single items (copy recursively)
+            foreach (var it in selected)
             {
-                var src = Path.Combine(sourceFolder, file);
-                var dst = Path.Combine(destFolder, file);
-                try
+                if (cancelled) break;
+                var name = it.Text;
+                var isDir = it.SubItems.Count > 1 && it.SubItems[1].Text == "<DIR>";
+                var srcPath = Path.Combine(sourceFolder, name);
+                var dstPath = Path.Combine(destFolder, name);
+
+                if (isDir)
                 {
-                    if (File.Exists(dst))
+                    // Prevent copying folder into its own subfolder
+                    try
                     {
-                        var msg = "대상에 동일한 이름의 파일이 이미 있습니다. 덮어쓰시겠습니까?";
-                        var res = MessageBox.Show(msg, "파일 충돌", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+                        var srcFull = Path.GetFullPath(srcPath).TrimEnd(Path.DirectorySeparatorChar);
+                        var dstFull = Path.GetFullPath(dstPath).TrimEnd(Path.DirectorySeparatorChar);
+                        if (dstFull.StartsWith(srcFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) || dstFull.Equals(srcFull, StringComparison.OrdinalIgnoreCase))
+                        {
+                            MessageBox.Show("대상 폴더가 원본 폴더의 하위이거나 동일합니다. 복사할 수 없습니다.", "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            skipped++;
+                            continue;
+                        }
+                    }
+                    catch
+                    {
+                        // ignore path issues
+                    }
+
+                    // If destination directory exists, ask once whether to overwrite/skip/cancel for this folder
+                    if (Directory.Exists(dstPath))
+                    {
+                        var msg = "대상에 동일한 이름의 폴더가 이미 있습니다. 폴더를 덮어쓰시겠습니까?";
+                        var res = MessageBox.Show(msg, "폴더 충돌", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
                         if (res == DialogResult.Cancel)
                         {
                             cancelled = true;
@@ -125,15 +279,85 @@ namespace FileCompare
                             skipped++;
                             continue;
                         }
-                        // Yes => overwrite
-                    }
 
-                    File.Copy(src, dst, true);
-                    success++;
+                        // Yes => show confirmation dialog with folder summary before copying
+                        using var conf = new ConfirmCopyForm(srcPath, dstPath, isDirectory: true);
+                        var cr = conf.ShowDialog(this);
+                        if (cr != DialogResult.OK)
+                        {
+                            cancelled = true;
+                            break;
+                        }
+
+                        try
+                        {
+                            DirectoryCopyRecursive(srcPath, dstPath, ref success, ref failed, ref skipped, ref cancelled, overwrite: true);
+                        }
+                        catch
+                        {
+                            failed++;
+                        }
+                    }
+                    else
+                    {
+                        using var conf = new ConfirmCopyForm(srcPath, dstPath, isDirectory: true);
+                        var cr = conf.ShowDialog(this);
+                        if (cr != DialogResult.OK)
+                        {
+                            cancelled = true;
+                            break;
+                        }
+
+                        try
+                        {
+                            DirectoryCopyRecursive(srcPath, dstPath, ref success, ref failed, ref skipped, ref cancelled, overwrite: true);
+                        }
+                        catch
+                        {
+                            failed++;
+                        }
+                    }
                 }
-                catch
+                else
                 {
-                    failed++;
+                    // file
+                    var src = srcPath;
+                    var dst = dstPath;
+                    try
+                    {
+                        if (File.Exists(dst))
+                        {
+                            var msg = "대상에 동일한 이름의 파일이 이미 있습니다. 덮어쓰시겠습니까?";
+                            var res = MessageBox.Show(msg, "파일 충돌", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+                            if (res == DialogResult.Cancel)
+                            {
+                                cancelled = true;
+                                break;
+                            }
+                            if (res == DialogResult.No)
+                            {
+                                skipped++;
+                                continue;
+                            }
+
+                            // Yes -> show confirmation dialog with details before actual copy
+                            using var conf = new ConfirmCopyForm(src, dst, isDirectory: false);
+                            var cr = conf.ShowDialog(this);
+                            if (cr != DialogResult.OK)
+                            {
+                                // user cancelled at confirmation
+                                cancelled = true;
+                                break;
+                            }
+                        }
+
+                        File.Copy(src, dst, true);
+                        success++;
+                    }
+                    catch
+                    {
+                        failed++;
+                    }
                 }
             }
 
@@ -146,11 +370,50 @@ namespace FileCompare
                 MessageBox.Show($"복사 완료: {success}개 성공, {skipped}개 건너뜀, {failed}개 실패", "완료", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
-            // Refresh destination list if visible
-            if (sourceList == lvwLeftDir)
-                PopulateListView(lvwRightDir, destFolder);
-            else
-                PopulateListView(lvwLeftDir, destFolder);
+            // Refresh both lists
+            if (Directory.Exists(txtLeftDir.Text)) PopulateListView(lvwLeftDir, txtLeftDir.Text);
+            if (Directory.Exists(txtRightDir.Text)) PopulateListView(lvwRightDir, txtRightDir.Text);
+        }
+
+        // Recursive directory copy helper
+        private void DirectoryCopyRecursive(string sourceDirName, string destDirName, ref int success, ref int failed, ref int skipped, ref bool cancelled, bool overwrite)
+        {
+            if (cancelled) return;
+            if (!Directory.Exists(sourceDirName)) return;
+
+            Directory.CreateDirectory(destDirName);
+
+            // copy files
+            foreach (var filePath in Directory.GetFiles(sourceDirName))
+            {
+                if (cancelled) return;
+                var fileName = Path.GetFileName(filePath);
+                var destFile = Path.Combine(destDirName, fileName);
+                try
+                {
+                    if (File.Exists(destFile) && !overwrite)
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    File.Copy(filePath, destFile, overwrite);
+                    success++;
+                }
+                catch
+                {
+                    failed++;
+                }
+            }
+
+            // recurse subdirectories
+            foreach (var dirPath in Directory.GetDirectories(sourceDirName))
+            {
+                if (cancelled) return;
+                var dirName = Path.GetFileName(dirPath);
+                var destSub = Path.Combine(destDirName, dirName);
+                // if destSub exists and overwrite==false, ask handled by caller; here we pass overwrite true to replace files
+                DirectoryCopyRecursive(dirPath, destSub, ref success, ref failed, ref skipped, ref cancelled, overwrite);
+            }
         }
 
         // Custom draw handlers to ensure full-row coloring is visible
@@ -169,9 +432,20 @@ namespace FileCompare
         {
             var bg = e.SubItem.BackColor.IsEmpty ? e.Item.BackColor : e.SubItem.BackColor;
             var fg = e.SubItem.ForeColor.IsEmpty ? e.Item.ForeColor : e.SubItem.ForeColor;
+            // indicate directories with a darker border
+            bool isDir = e.Item.SubItems.Count > 1 && e.Item.SubItems[1].Text == "<DIR>";
             using (var b = new SolidBrush(bg))
             {
                 e.Graphics.FillRectangle(b, e.Bounds);
+            }
+            if (isDir)
+            {
+                using (var p = new Pen(Color.Gray, 2))
+                {
+                    var r = e.Bounds;
+                    r.Inflate(-2, -2);
+                    e.Graphics.DrawRectangle(p, r);
+                }
             }
             TextFormatFlags flags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter;
             TextRenderer.DrawText(e.Graphics, e.SubItem.Text, e.SubItem.Font, e.Bounds, fg, flags);
