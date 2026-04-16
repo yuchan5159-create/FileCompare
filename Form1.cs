@@ -179,6 +179,7 @@ lv.Items.Clear();
           .Select(p => new DirectoryInfo(p)), .OrderBy(d => d.Name);
 foreach (var d in dirs) {
 var item = new ListViewItem(d.Name);
+
 item.SubItems.Add("<DIR>");
 
 item.SubItems.Add(d.LastWriteTime.ToString("g"));
