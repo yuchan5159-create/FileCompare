@@ -180,6 +180,7 @@ lv.Items.Clear();
 foreach (var d in dirs) {
 var item = new ListViewItem(d.Name);
 item.SubItems.Add("<DIR>");
+
 item.SubItems.Add(d.LastWriteTime.ToString("g"));
 lv.Items.Add(item);}
             }
