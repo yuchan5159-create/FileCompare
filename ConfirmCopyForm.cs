@@ -16,6 +16,11 @@ namespace FileCompare
         public ConfirmCopyForm(string sourcePath, string destPath, bool isDirectory)
         {
             Text = "복사 확인";
+
+
+
+
+
             Width = 600;
             Height = 400;
             StartPosition = FormStartPosition.CenterParent;
